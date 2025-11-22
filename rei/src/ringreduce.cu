@@ -37,7 +37,7 @@ __global__ void add_kernel(float* dest, const float* src, int offset, int n) {
 }
 
 // ring all-reduce using RS + AG
-extern "C" void ring_allreduce_naive(
+extern "C" void ring_allreduce(
     float* inout_buf, int input_size, ncclComm_t comm, int rank, int n_ranks, cudaStream_t stream
 ) {
     // compute chunk size and allocate temporary receive buffer

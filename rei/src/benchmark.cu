@@ -1,12 +1,14 @@
-// correctness.cu
-// Calls the ring-allreduce implementation and checks the output for correctness
+// benchmark.cu
+// Calls the ring-allreduce implementation with various buffer sizes and measures the latency
 
 #include <assert.h>
 #include <cuda_runtime.h>
+#include <math.h>
 #include <nccl.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
 
 // ! NOTE: use the same function name and interface for all implementations
 extern "C" void ring_allreduce(
@@ -42,6 +44,9 @@ struct ThreadArgs {
     int input_size;
     int* devs;
     ncclComm_t* comms;
+    int iters;
+    int warmup;
+    double* out_time;
 };
 
 // initialize input kernel: buf[i] = 100*rank + i
@@ -50,7 +55,14 @@ __global__ void init_input_kernel(float* buf, int count, int rank) {
     if (idx < count) buf[idx] = 100.0f * rank + (float)idx;
 }
 
-// thread function to call ring-allreduce on a rank and check its output
+// get current time
+static double now_sec() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (double)tv.tv_sec + 1e-6 * (double)tv.tv_usec;
+}
+
+// thread function to call ring-allreduce on a rank and benchmark
 void* thread_fn(void* arg) {
     ThreadArgs* a = (ThreadArgs*)arg;
     int rank = a->rank;
@@ -75,41 +87,21 @@ void* thread_fn(void* arg) {
     CUDA_CALL(cudaStreamSynchronize(stream));
 
 
-    // call ring all-reduce (in-place)
-    ring_allreduce(d_buf, input_size, comm, rank, n_ranks, stream);
+    // warmup
+    for (int i = 0; i < a->warmup; i++)
+        ring_allreduce(d_buf, input_size, comm, rank, n_ranks, stream);
+    CUDA_CALL(cudaStreamSynchronize(stream));
 
 
-    // copy back result to host and verify: output[i] = 100*0+i + 100*1+i + ... 100*(nranks-1)+i
-    float* h_res = (float*)malloc(input_size * sizeof(float));
-    CUDA_CALL(cudaMemcpy(h_res, d_buf, input_size * sizeof(float), cudaMemcpyDeviceToHost));
+    // benchmark
+    double t0 = now_sec();
+    for (int i = 0; i < a->iters; i++)
+        ring_allreduce(d_buf, input_size, comm, rank, n_ranks, stream);
+    CUDA_CALL(cudaStreamSynchronize(stream));
+    double t1 = now_sec();
 
-    const float atol = 1e-3f;
-    int sum_ranks = n_ranks * (n_ranks - 1) * 50;
-    bool ok = true;
-    for (int i = 0; i < input_size; i++) {
-        float expected = (float)sum_ranks + (float)n_ranks * (float)i;
-        float got = h_res[i];
-        float diff = fabsf(got - expected);
-        if (diff > atol) {
-            fprintf(
-                stderr,
-                "Rank %d mismatch at idx %d: got %f expected %f (diff %f)\n",
-                rank,
-                i,
-                got,
-                expected,
-                diff
-            );
-            ok = false;
-            break;
-        }
-    }
-    if (ok)
-        printf("Rank %d: verification PASSED (count=%d)\n", rank, input_size);
-    else
-        printf("Rank %d: verification FAILED\n", rank);
+    if (rank == 0) *(a->out_time) = (t1 - t0) * 1e6 / (double)a->iters;  // µs per iter
 
-    free(h_res);
     CUDA_CALL(cudaFree(d_buf));
     CUDA_CALL(cudaStreamDestroy(stream));
     return nullptr;
@@ -117,25 +109,16 @@ void* thread_fn(void* arg) {
 
 
 
-// Usage: ./correctness <n_devices> <input_size>
+// Usage: ./correctness <n_devices>
 int main(int argc, char** argv) {
     // parse CLI
-    if (argc < 3) {
-        printf("Usage: %s <n_devices> <inputsz> (example: %s 4 1048576)\n", argv[0], argv[0]);
+    if (argc < 2) {
+        printf("Usage: %s <n_devices>(example: %s 4)\n", argv[0], argv[0]);
         return 1;
     }
     int n_devices = atoi(argv[1]);
-    if (n_devices < 2 or n_devices > 4) {
-        fprintf(stderr, "n_devices must be between 2 and 4\n");
-        return 1;
-    }
-    int input_size = atoi(argv[2]);
-    if (input_size <= 0) {
-        fprintf(stderr, "input_size must be > 0\n");
-        return 1;
-    }
-    if (input_size % n_devices) {
-        fprintf(stderr, "input_size must be a multiple of n_devices\n");
+    if (n_devices != 2 && n_devices != 4) {
+        fprintf(stderr, "n_devices must be 2 or 4\n");
         return 1;
     }
 
@@ -147,26 +130,54 @@ int main(int argc, char** argv) {
     ncclComm_t comms[n_devices];
     NCCL_CALL(ncclCommInitAll(comms, n_devices, devs));
 
-    // make threads, one per rank
-    pthread_t threads[n_devices];
-    ThreadArgs args[n_devices];
-    for (int r = 0; r < n_devices; r++) {
-        args[r].rank = r;
-        args[r].n_ranks = n_devices;
-        args[r].input_size = input_size;
-        args[r].devs = devs;
-        args[r].comms = comms;
-        int rc = pthread_create(&threads[r], nullptr, thread_fn, &args[r]);
-        if (rc) {
-            fprintf(stderr, "Failed to create thread %d\n", r);
-            exit(1);
+    // create output file
+    FILE* f = fopen("results.csv", "w");
+    fprintf(f, "input_size,input_bytes,avg_us\n");
+    fflush(f);
+
+    const int warmup = 20;
+    const int iters = 200;
+    const int min_sz = 256;         // 1KB
+    const int max_sz = 1073741824;  // 4GB
+    assert(max_sz <= 1073741824);   // otherwise won't fit, we use long below as *2 could overflow
+
+    for (long input_size = min_sz; input_size <= max_sz; input_size *= 2) {
+        assert(input_size % n_devices == 0);
+        size_t bytes = (size_t)input_size * sizeof(float);
+        printf("\n=== Benchmarking input_size = %d floats (%zu bytes) ===\n", input_size, bytes);
+
+        pthread_t threads[n_devices];
+        ThreadArgs args[n_devices];
+
+        double t_avg = 0.0;
+        for (int r = 0; r < n_devices; r++) {
+            args[r].rank = r;
+            args[r].n_ranks = n_devices;
+            args[r].input_size = input_size;
+            args[r].devs = devs;
+            args[r].comms = comms;
+            args[r].iters = iters;
+            args[r].warmup = warmup;
+            args[r].out_time = &t_avg;
+
+            int rc = pthread_create(&threads[r], nullptr, thread_fn, &args[r]);
+            if (rc) {
+                fprintf(stderr, "Failed to create thread %d\n", r);
+                exit(1);
+            }
         }
+
+        for (int r = 0; r < n_devices; r++) pthread_join(threads[r], nullptr);
+
+        fprintf(f, "%d,%zu,%.3f\n", input_size, bytes, t_avg);
+        fflush(f);
+        printf("Average latency: %.3f µs\n", t_avg);
     }
 
-    // wait + cleanup
-    for (int r = 0; r < n_devices; r++) pthread_join(threads[r], nullptr);
+    // cleanup
     for (int r = 0; r < n_devices; r++) ncclCommDestroy(comms[r]);
-    printf("All done.\n");
+    fclose(f);
+    printf("\nAll done. Results written to results.csv\n");
 
     return 0;
 }
