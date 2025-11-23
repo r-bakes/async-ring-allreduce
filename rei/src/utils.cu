@@ -7,13 +7,13 @@
 
 __global__ void init_input_kernel(float* buf, int rank, int input_size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < input_size) buf[idx] = 100.0f * rank + idx * 1000.0f / input_size;
+    if (idx < input_size) buf[idx] = 100.0f * rank + idx * 100.0f / input_size;
 }
 
 bool check_correctness(float* h_res, int rank, int n_ranks, int input_size, float atol) {
     int sum_ranks = n_ranks * (n_ranks - 1) * 50;
     for (int i = 0; i < input_size; i++) {
-        float expected = (float)sum_ranks + (float)n_ranks * 1000.0f * i / input_size;
+        float expected = (float)sum_ranks + (float)n_ranks * 100.0f * i / input_size;
         float got = h_res[i];
         float diff = fabsf(got - expected);
         if (diff > atol) {

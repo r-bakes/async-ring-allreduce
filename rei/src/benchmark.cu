@@ -16,10 +16,12 @@
 
 // TODO: add new implementations here
 static RingRunFunc impls[] = {
+    ring_nccl,
     ring_naive,
 };
 
 static const char* impl_names[] = {
+    "nccl",
     "naive",
 };
 
@@ -39,12 +41,12 @@ int main(int argc, char** argv) {
     }
 
     // initialize device ranks (device[i] = rank[i])
-    int devs[n_devices];
-    for (int i = 0; i < n_devices; i++) devs[i] = i;
+    int devices[n_devices];
+    for (int i = 0; i < n_devices; i++) devices[i] = i;
 
     // create NCCL communicators
     ncclComm_t comms[n_devices];
-    NCCL_CALL(ncclCommInitAll(comms, n_devices, devs));
+    NCCL_CALL(ncclCommInitAll(comms, n_devices, devices));
 
     // create output file
     FILE* f = fopen("results.csv", "w");
@@ -65,7 +67,7 @@ int main(int argc, char** argv) {
         // use long as 1073741824*2 could overflow, meaning our for loop won't terminate correctly
         for (long input_size = min_sz; input_size <= max_sz; input_size *= 2) {
             size_t n_bytes = (size_t)input_size * sizeof(float);
-            printf("input_size = %d (%zu bytes), ", input_size, n_bytes);
+            printf("input_size: %d (%zu bytes), ", input_size, n_bytes);
 
             // start thread for each GPU
             auto impl = (void* (*)(void*))impls[i];
@@ -75,9 +77,6 @@ int main(int argc, char** argv) {
             RunArgs args[n_devices];
             bool corrects[n_devices];
             for (int r = 0; r < n_devices; r++) {
-                args[r].rank = r;
-                args[r].device = devs[r];
-                args[r].n_ranks = n_devices;
                 args[r].input_size = input_size;
                 args[r].comm = comms[r];
                 args[r].n_warmup = n_warmup;

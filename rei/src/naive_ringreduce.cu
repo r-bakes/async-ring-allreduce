@@ -16,8 +16,19 @@ __global__ void add_kernel(float* dest, const float* src, int offset, int n) {
 
 // ring all-reduce using RS + AG
 void ring_allreduce(
-    float* inout_buf, int input_size, ncclComm_t comm, int rank, int n_ranks, cudaStream_t stream
+    const float* d_inbuf, float* d_outbuf, int input_size, ncclComm_t comm, cudaStream_t stream
 ) {
+    // get rank and number of ranks
+    int rank, n_ranks;
+    ncclCommUserRank(comm, &rank);
+    ncclCommCount(comm, &n_ranks);
+
+    // copy input buffer to output buffer
+    if (d_inbuf != d_outbuf)
+        CUDA_CALL(cudaMemcpyAsync(
+            d_outbuf, d_inbuf, input_size * sizeof(float), cudaMemcpyDeviceToDevice, stream
+        ));
+
     // compute chunk size and allocate temporary receive buffer
     assert(input_size % n_ranks == 0);
     int chunk_size = input_size / n_ranks;
@@ -36,7 +47,7 @@ void ring_allreduce(
         int recv_off = recv_chunk * chunk_size;
 
         NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(inout_buf + send_off, chunk_size, ncclFloat, next_rank, comm, stream));
+        NCCL_CALL(ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, stream));
         NCCL_CALL(ncclRecv(temp_buf, chunk_size, ncclFloat, prev_rank, comm, stream));
         NCCL_CALL(ncclGroupEnd());
 
@@ -45,7 +56,7 @@ void ring_allreduce(
         // reduce
         const int threads = 256;
         int blocks = (chunk_size + threads - 1) / threads;
-        add_kernel<<<blocks, threads, 0, stream>>>(inout_buf, temp_buf, recv_off, chunk_size);
+        add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, recv_off, chunk_size);
         CUDA_CALL(cudaGetLastError());
         CUDA_CALL(cudaStreamSynchronize(stream));
     }
@@ -62,8 +73,8 @@ void ring_allreduce(
         int recv_off = recv_chunk * chunk_size;
 
         NCCL_CALL(ncclGroupStart());
-        NCCL_CALL(ncclSend(inout_buf + send_off, chunk_size, ncclFloat, next_rank, comm, stream));
-        NCCL_CALL(ncclRecv(inout_buf + recv_off, chunk_size, ncclFloat, prev_rank, comm, stream));
+        NCCL_CALL(ncclSend(d_outbuf + send_off, chunk_size, ncclFloat, next_rank, comm, stream));
+        NCCL_CALL(ncclRecv(d_outbuf + recv_off, chunk_size, ncclFloat, prev_rank, comm, stream));
         NCCL_CALL(ncclGroupEnd());
 
         CUDA_CALL(cudaStreamSynchronize(stream));
@@ -76,42 +87,47 @@ void ring_allreduce(
 
 // interface function, runs for each rank
 void* ring_naive(RunArgs* args) {
-    int rank = args->rank;
-    int dev = args->device;
-    int n_ranks = args->n_ranks;
     int input_size = args->input_size;
     ncclComm_t comm = args->comm;
+    int rank, n_ranks, device;
+    ncclCommUserRank(comm, &rank);
+    ncclCommCount(comm, &n_ranks);
+    ncclCommCuDevice(comm, &device);
 
 
     // initialize CUDA stream
-    CUDA_CALL(cudaSetDevice(dev));
+    CUDA_CALL(cudaSetDevice(device));
     cudaStream_t stream;
     CUDA_CALL(cudaStreamCreate(&stream));
 
 
-    // initialize input for this rank at d_buf
-    float* d_buf = nullptr;
-    CUDA_CALL(cudaMalloc(&d_buf, input_size * sizeof(float)));
+    // initialize input and output
+    float* d_inbuf = nullptr;
+    CUDA_CALL(cudaMalloc(&d_inbuf, input_size * sizeof(float)));
 
     const int threads = 256;
     int blocks = (input_size + threads - 1) / threads;
-    init_input_kernel<<<blocks, threads, 0, stream>>>(d_buf, rank, input_size);
+    init_input_kernel<<<blocks, threads, 0, stream>>>(d_inbuf, rank, input_size);
     CUDA_CALL(cudaGetLastError());
     CUDA_CALL(cudaStreamSynchronize(stream));
 
+    float* d_outbuf = nullptr;
+    CUDA_CALL(cudaMalloc(&d_outbuf, input_size * sizeof(float)));
 
-    // call ring all-reduce (in-place)
-    ring_allreduce(d_buf, input_size, comm, rank, n_ranks, stream);
+
+    // call ring all-reduce
+    ring_allreduce(d_inbuf, d_outbuf, input_size, comm, stream);
 
 
     // copy back result to host and verify output, short circuit if incorrect
     float* h_res = (float*)malloc(input_size * sizeof(float));
-    CUDA_CALL(cudaMemcpy(h_res, d_buf, input_size * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CALL(cudaMemcpy(h_res, d_outbuf, input_size * sizeof(float), cudaMemcpyDeviceToHost));
     *(args->correct) = check_correctness(h_res, rank, n_ranks, input_size, args->atol);
     free(h_res);
 
     if (!*(args->correct)) {
-        CUDA_CALL(cudaFree(d_buf));
+        CUDA_CALL(cudaFree(d_inbuf));
+        CUDA_CALL(cudaFree(d_outbuf));
         CUDA_CALL(cudaStreamDestroy(stream));
         return nullptr;
     }
@@ -119,19 +135,22 @@ void* ring_naive(RunArgs* args) {
 
     // warmup
     for (int i = 0; i < args->n_warmup; i++)
-        ring_allreduce(d_buf, input_size, comm, rank, n_ranks, stream);
+        ring_allreduce(d_inbuf, d_outbuf, input_size, comm, stream);
     CUDA_CALL(cudaStreamSynchronize(stream));
 
 
     // benchmark
     double t0 = get_time();
     for (int i = 0; i < args->n_iters; i++)
-        ring_allreduce(d_buf, input_size, comm, rank, n_ranks, stream);
+        ring_allreduce(d_inbuf, d_outbuf, input_size, comm, stream);
     CUDA_CALL(cudaStreamSynchronize(stream));
     double t1 = get_time();
     if (rank == 0) *(args->avg_latency) = (t1 - t0) * 1e6 / (double)args->n_iters;  // µs per iter
 
-    CUDA_CALL(cudaFree(d_buf));
+
+    // cleanup
+    CUDA_CALL(cudaFree(d_inbuf));
+    CUDA_CALL(cudaFree(d_outbuf));
     CUDA_CALL(cudaStreamDestroy(stream));
     return nullptr;
 }

@@ -20,7 +20,7 @@ conda activate $PSCRATCH/project
 # compile (TODO: add new implementations here to be compiled)
 nvcc -o benchmark \
     src/benchmark.cu src/utils.cu \
-    src/naive_ringreduce.cu \
+    src/nccl_ringreduce.cu src/naive_ringreduce.cu \
     -I$PSCRATCH/project/include \
     -L$PSCRATCH/project/lib \
     -lnccl -lpthread
