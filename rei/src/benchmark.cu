@@ -6,6 +6,8 @@
 #include <pthread.h>
 #include <stdio.h>
 
+#include <string>
+
 #include "interface.h"
 
 
@@ -24,11 +26,11 @@ static const char* impl_names[] = {
 
 
 
-// Usage: ./benchmark <n_devices>
+// Usage: ./benchmark <n_devices> <filename>
 int main(int argc, char** argv) {
     // parse CLI
-    if (argc < 2) {
-        printf("Usage: %s <n_devices>(example: %s 4)\n", argv[0], argv[0]);
+    if (argc < 3) {
+        printf("Usage: %s <n_devices> <filename> (example: %s 4 result.csv)\n", argv[0], argv[0]);
         return 1;
     }
     int n_devices = atoi(argv[1]);
@@ -36,6 +38,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "n_devices must be 2 or 4\n");
         return 1;
     }
+    std::string filename = "results/" + std::string(argv[2]);
 
     // initialize device ranks (device[i] = rank[i])
     int devices[n_devices];
@@ -46,7 +49,7 @@ int main(int argc, char** argv) {
     NCCL_CALL(ncclCommInitAll(comms, n_devices, devices));
 
     // create output file
-    FILE* f = fopen("results.csv", "w");
+    FILE* f = fopen(filename.c_str(), "w");
     fprintf(f, "impl,input_size,input_bytes,avg_latency,throughput\n");
     fflush(f);
 
@@ -118,7 +121,7 @@ int main(int argc, char** argv) {
     // cleanup
     for (int r = 0; r < n_devices; r++) ncclCommDestroy(comms[r]);
     fclose(f);
-    printf("\nAll done. Results written to results.csv\n");
+    printf("\nAll done. Results written to %s\n", filename.c_str());
 
     return 0;
 }

@@ -27,5 +27,5 @@ nvcc -o benchmark \
     -lnccl -lpthread
 
 # run
-LD_LIBRARY_PATH=$PSCRATCH/project/lib NCCL_DEBUG=WARN ./benchmark 4
+LD_LIBRARY_PATH=$PSCRATCH/project/lib NCCL_DEBUG=WARN ./benchmark 4 output.csv
 ```
