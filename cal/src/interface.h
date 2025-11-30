@@ -68,3 +68,4 @@ typedef void* (*RingRunFunc)(RunArgs* args);
 void* ring_nccl(RunArgs* args);
 void* ring_naive(RunArgs* args);
 void* ring_pipelined(RunArgs* args);
+void* ring_p2p(RunArgs* args);

@@ -13,15 +13,18 @@
 
 // TODO: add new implementations here
 static RingRunFunc impls[] = {
-    ring_nccl,
-    ring_naive,
-    ring_pipelined,
+    // ring_nccl,
+    // ring_naive,
+    // ring_pipelined,
+    ring_p2p
+
 };
 
 static const char* impl_names[] = {
-    "nccl",
-    "naive",
-    "pipelined",
+    // "nccl",
+    // "naive",
+    // "pipelined",
+    "ring_p2p"
 };
 
 
