@@ -28,6 +28,7 @@
     } while (0)
 
 
+static constexpr int MAX_RANKS = 4;
 
 typedef struct {
     // all-reduce arguments
