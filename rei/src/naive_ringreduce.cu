@@ -11,22 +11,22 @@
 
 
 // helper functions to get send and recv chunk offsets
-static std::pair<int, int> get_offset(int step, int rank, int n_ranks, int chunk_size) {
+static std::pair<long, long> get_offset(int step, int rank, int n_ranks, long chunk_size) {
     assert(step >= 0 && step < 2 * (n_ranks - 1));
-    int send_chunk = (2 * n_ranks - 1 + rank - step) % n_ranks;
-    int recv_chunk = (2 * n_ranks - 2 + rank - step) % n_ranks;
+    long send_chunk = (2 * n_ranks - 1 + rank - step) % n_ranks;
+    long recv_chunk = (2 * n_ranks - 2 + rank - step) % n_ranks;
     return {send_chunk * chunk_size, recv_chunk * chunk_size};
 }
 
 // element-wise add kernel: dest[i + offset] += src[i]
-static __global__ void add_kernel(float* dest, const float* src, int offset, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+static __global__ void add_kernel(float* dest, const float* src, long offset, long n) {
+    long idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) dest[offset + idx] += src[idx];
 }
 
 // ring all-reduce using RS + AG
 static void ring_allreduce(
-    const float* d_inbuf, float* d_outbuf, int input_size, ncclComm_t comm, cudaStream_t stream
+    const float* d_inbuf, float* d_outbuf, long input_size, ncclComm_t comm, cudaStream_t stream
 ) {
     // get rank and number of ranks
     int rank, n_ranks;
@@ -41,7 +41,7 @@ static void ring_allreduce(
 
     // compute chunk size and allocate temporary receive buffer
     assert(input_size % n_ranks == 0);
-    int chunk_size = input_size / n_ranks;
+    long chunk_size = input_size / n_ranks;
     float* temp_buf = nullptr;
     CUDA_CALL(cudaMalloc(&temp_buf, chunk_size * sizeof(float)));
 
@@ -57,7 +57,7 @@ static void ring_allreduce(
 
         // reduce
         const int threads = 256;
-        int blocks = (chunk_size + threads - 1) / threads;
+        long blocks = (chunk_size + threads - 1) / threads;
         add_kernel<<<blocks, threads, 0, stream>>>(d_outbuf, temp_buf, recv_off, chunk_size);
         CUDA_CALL(cudaGetLastError());
     }
@@ -79,7 +79,7 @@ static void ring_allreduce(
 
 // interface function, runs for each rank
 void* ring_naive(RunArgs* args) {
-    int input_size = args->input_size;
+    long input_size = args->input_size;
     ncclComm_t comm = args->comm;
     int rank, n_ranks, device;
     ncclCommUserRank(comm, &rank);
@@ -98,7 +98,7 @@ void* ring_naive(RunArgs* args) {
     CUDA_CALL(cudaMalloc(&d_inbuf, input_size * sizeof(float)));
 
     const int threads = 256;
-    int blocks = (input_size + threads - 1) / threads;
+    long blocks = (input_size + threads - 1) / threads;
     init_input_kernel<<<blocks, threads, 0, stream>>>(d_inbuf, rank, input_size);
     CUDA_CALL(cudaGetLastError());
 

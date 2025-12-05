@@ -10,7 +10,7 @@
 
 // interface function, runs for each rank
 void* ring_nccl(RunArgs* args) {
-    int input_size = args->input_size;
+    long input_size = args->input_size;
     ncclComm_t comm = args->comm;
     int rank, n_ranks, device;
     ncclCommUserRank(comm, &rank);
@@ -29,7 +29,7 @@ void* ring_nccl(RunArgs* args) {
     CUDA_CALL(cudaMalloc(&d_inbuf, input_size * sizeof(float)));
 
     const int threads = 256;
-    int blocks = (input_size + threads - 1) / threads;
+    long blocks = (input_size + threads - 1) / threads;
     init_input_kernel<<<blocks, threads, 0, stream>>>(d_inbuf, rank, input_size);
     CUDA_CALL(cudaGetLastError());
 

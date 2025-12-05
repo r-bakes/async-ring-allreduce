@@ -56,12 +56,11 @@ int main(int argc, char** argv) {
     );
     fflush(f);
 
-    const int n_warmup = 20;
+    const int n_warmup = 200;
     const int n_iters = 200;
     const float atol = 1e-3f;
-    const int min_sz = 256;         // 1KB
-    const int max_sz = 1073741824;  // 4GB
-    assert(max_sz <= 1073741824);   // otherwise won't fit in int32
+    const long min_sz = 256;         // 1KB
+    const long max_sz = 2147483648;  // 8GB
 
     const int n_impl = sizeof(impls) / sizeof(impls[0]);
     for (int i = 0; i < n_impl; i++) {
@@ -70,7 +69,7 @@ int main(int argc, char** argv) {
         // use long as 1073741824*2 could overflow, meaning our for loop won't terminate correctly
         for (long input_size = min_sz; input_size <= max_sz; input_size *= 2) {
             size_t n_bytes = (size_t)input_size * sizeof(float);
-            printf("input_size: %d (%zu bytes), ", input_size, n_bytes);
+            printf("input_size: %lu (%zu bytes), ", input_size, n_bytes);
 
             // start thread for each GPU
             auto impl = (void* (*)(void*))impls[i];
@@ -109,7 +108,7 @@ int main(int argc, char** argv) {
                 double throughput = n_bytes / avg_latency;
                 fprintf(
                     f,
-                    "%s,%d,%zu,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+                    "%s,%lu,%zu,%.3f,%.3f,%.3f,%.3f,%.3f\n",
                     impl_names[i],
                     input_size,
                     n_bytes,

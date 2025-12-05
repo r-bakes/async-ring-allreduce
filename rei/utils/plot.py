@@ -29,7 +29,7 @@ def plot_scurve(input_file: str, output_file: str, title: str) -> None:
     
     # 2. Load Data
     data = pd.read_csv(input_file)
-    data['Bandwidth (GB/s)'] = data['throughput'] / 1000.0
+    data['Bandwidth (GB/s)'] = data['throughput'] * 1e6 / (1024 ** 3)  # Convert to GB/s
     data = data[data["impl"] != 'NCCL']  # remove NCCL as its too fast
     
     # 3. Plot All Implementations Together
@@ -47,6 +47,18 @@ def plot_scurve(input_file: str, output_file: str, title: str) -> None:
     )
     
     plt.xscale('log')
+    ticks = [
+        1024,
+        1024*8,
+        1024*8*8,
+        1024*8*8*8,
+        1024*8*8*8*8,
+        1024*8*8*8*8*8,
+        1024*8*8*8*8*8*8,
+        1024*8*8*8*8*8*8*8,
+        1024*8*8*8*8*8*8*8*4,
+    ]
+    plt.gca().set_xticks(ticks)
     plt.gca().xaxis.set_major_formatter(ticker.FuncFormatter(format_bytes))
     
     plt.grid(True, which="minor", ls="--", alpha=0.3)
@@ -54,7 +66,7 @@ def plot_scurve(input_file: str, output_file: str, title: str) -> None:
     
     plt.title(title, fontsize=16, fontweight='bold')
     plt.xlabel("Input Size", fontsize=12)
-    plt.ylabel("Effective Bandwidth (GB/s)", fontsize=12)
+    plt.ylabel("Per-GPU Bandwidth (GB/s)", fontsize=12)
     plt.legend(title='Implementation', loc="upper left")
     
     plt.tight_layout()

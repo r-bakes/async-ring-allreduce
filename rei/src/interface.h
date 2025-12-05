@@ -32,7 +32,7 @@ static constexpr int MAX_RANKS = 4;
 
 typedef struct {
     // all-reduce arguments
-    int input_size;
+    long input_size;
     ncclComm_t comm;
     // benchmark & correctness arguments
     int n_warmup;
@@ -48,10 +48,10 @@ typedef struct {
 
 
 // initialize buf[i] = 100*rank + 100*i/input_size
-__global__ void init_input_kernel(float* buf, int rank, int input_size);
+__global__ void init_input_kernel(float* buf, int rank, long input_size);
 
 // verify output[i] = 100*0 + 100*1 + ... 100*(n_ranks-1) + n_ranks*100*i/input_size
-bool check_correctness(float* h_res, int rank, int n_ranks, int input_size, float atol);
+bool check_correctness(float* h_res, int rank, int n_ranks, long input_size, float atol);
 
 // get current time in µs
 double get_time();

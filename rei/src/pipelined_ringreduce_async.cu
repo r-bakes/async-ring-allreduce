@@ -40,24 +40,24 @@ static void init_p2p(int rank, int n_ranks) {
 }
 
 // helper functions to get send and recv chunk offsets
-static std::pair<int, int> get_offset(
-    int step, int rank, int n_chunks, int n_batches, int chunk_size
+static std::pair<long, long> get_offset(
+    int step, int rank, int n_chunks, int n_batches, long chunk_size
 ) {
     assert(step >= 0 && step < 2 * (n_chunks - n_batches));
-    int send_chunk = (2 * n_chunks - 1 + rank * n_batches - step) % n_chunks;
-    int recv_chunk = (2 * n_chunks - 1 - n_batches + rank * n_batches - step) % n_chunks;
+    long send_chunk = (2 * n_chunks - 1 + rank * n_batches - step) % n_chunks;
+    long recv_chunk = (2 * n_chunks - 1 - n_batches + rank * n_batches - step) % n_chunks;
     return {send_chunk * chunk_size, recv_chunk * chunk_size};
 }
 
 // element-wise add kernel: dest[i + offset] += src[i]
-static __global__ void add_kernel(float* dest, const float* src, int offset, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+static __global__ void add_kernel(float* dest, const float* src, long offset, long n) {
+    long idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) dest[offset + idx] += src[idx];
 }
 
 // ring all-reduce using RS + AG
 static void ring_allreduce(
-    const float* d_inbuf, float* d_outbuf, int input_size, ncclComm_t comm, cudaStream_t streams[2]
+    const float* d_inbuf, float* d_outbuf, long input_size, ncclComm_t comm, cudaStream_t streams[2]
 ) {
     // get rank and number of ranks and register output buffer address for this rank
     int rank, n_ranks;
@@ -77,7 +77,7 @@ static void ring_allreduce(
     assert(n_batches > 1);
     assert(input_size >= n_chunks);
     assert(input_size % n_chunks == 0);
-    int chunk_size = input_size / n_chunks;
+    long chunk_size = input_size / n_chunks;
     float* temp_bufs[2];
     CUDA_CALL(cudaMalloc(&temp_bufs[0], chunk_size * sizeof(float)));
     CUDA_CALL(cudaMalloc(&temp_bufs[1], chunk_size * sizeof(float)));
@@ -103,7 +103,7 @@ static void ring_allreduce(
     for (int step = 1; step < n_chunks - n_batches; step++) {
         // reduce
         const int threads = 256;
-        int blocks = (chunk_size + threads - 1) / threads;
+        long blocks = (chunk_size + threads - 1) / threads;
         add_kernel<<<blocks, threads, 0, streams[(step + 1) % 2]>>>(
             d_outbuf, temp_bufs[(step + 1) % 2], recv_off, chunk_size
         );
@@ -124,7 +124,7 @@ static void ring_allreduce(
 
     // final reduce (happens concurrently with first all gather)
     const int threads = 256;
-    int blocks = (chunk_size + threads - 1) / threads;
+    long blocks = (chunk_size + threads - 1) / threads;
     add_kernel<<<blocks, threads, 0, streams[1]>>>(d_outbuf, temp_bufs[1], recv_off, chunk_size);
     CUDA_CALL(cudaGetLastError());
 
@@ -165,7 +165,7 @@ static void ring_allreduce(
 
 // interface function, runs for each rank
 void* ring_pipelined_async(RunArgs* args) {
-    int input_size = args->input_size;
+    long input_size = args->input_size;
     ncclComm_t comm = args->comm;
     int rank, n_ranks, device;
     ncclCommUserRank(comm, &rank);
@@ -191,7 +191,7 @@ void* ring_pipelined_async(RunArgs* args) {
     CUDA_CALL(cudaMalloc(&d_inbuf, input_size * sizeof(float)));
 
     const int threads = 256;
-    int blocks = (input_size + threads - 1) / threads;
+    long blocks = (input_size + threads - 1) / threads;
     init_input_kernel<<<blocks, threads, 0, streams[0]>>>(d_inbuf, rank, input_size);
     CUDA_CALL(cudaGetLastError());
 
