@@ -34,7 +34,7 @@ def save_single_plot(data, output_path, title, hue_col=None):
         dashes=True,
         linewidth=2.5,
         markersize=8,
-        palette="viridis"  # Good default palette for distinctions
+        palette="hls"  # Good default palette for distinctions
     )
 
     # Beautify Axes

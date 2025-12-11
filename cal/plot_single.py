@@ -5,10 +5,12 @@ import matplotlib.ticker as ticker
 import argparse
 import os
 
+
 def format_bytes(x, pos):
     """Formats axis ticks into readable sizes (KB, MB, GB)."""
     if x == 0:
         return '0 B'
+    
     # 1 KB = 1024 Bytes logic
     if x >= 1024**3:
         return f'{x / 1024**3:.0f} GB'
@@ -19,30 +21,20 @@ def format_bytes(x, pos):
     else:
         return f'{x:.0f} B'
 
-def plot_scurve(input_file):
+
+def plot_scurve(input_file: str, output_file: str, title: str) -> None:
     # 1. Setup Theme
     sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
     plt.rcParams['font.family'] = 'sans-serif'
     
     # 2. Load Data
-    if not os.path.exists(input_file):
-        print(f"Error: File '{input_file}' not found.")
-        return
-        
     data = pd.read_csv(input_file)
-
-    # 3. FILTER OUT NCCL
-    data = data[data['impl'] != 'nccl']
-
-    # 4. Data Preprocessing
-    # Assuming 'throughput' in CSV is MB/s (Bytes/microsecond)
-    # Convert to GB/s (1000 MB/s = 1 GB/s for standard networking reporting)
-    data['Bandwidth (GB/s)'] = data['throughput'] / 1000.0
-
-    # 5. Create Plot
-    plt.figure(figsize=(10, 6))
+    data['Bandwidth (GB/s)'] = data['throughput'] * 1e6 / (1024 ** 3)  # Convert to GB/s
+    data = data[data["impl"] != 'NCCL']  # remove NCCL as its too fast
     
-    p = sns.lineplot(
+    # 3. Plot All Implementations Together
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(
         data=data,
         x='input_bytes',
         y='Bandwidth (GB/s)',
@@ -53,29 +45,40 @@ def plot_scurve(input_file):
         markersize=8,
         palette="viridis"
     )
-
-    # 6. Beautify Axes
-    p.set_xscale('log')
-    p.xaxis.set_major_formatter(ticker.FuncFormatter(format_bytes))
+    
+    plt.xscale('log')
+    ticks = [
+        1024,
+        1024*8,
+        1024*8*8,
+        1024*8*8*8,
+        1024*8*8*8*8,
+        1024*8*8*8*8*8,
+        1024*8*8*8*8*8*8,
+        1024*8*8*8*8*8*8*8,
+        1024*8*8*8*8*8*8*8*4,
+    ]
+    plt.gca().set_xticks(ticks)
+    plt.gca().xaxis.set_major_formatter(ticker.FuncFormatter(format_bytes))
     
     plt.grid(True, which="minor", ls="--", alpha=0.3)
     plt.grid(True, which="major", ls="-", alpha=0.8)
-
-    plt.title("Ring AllReduce: Naive vs (Async) 4GPUS", fontsize=16, fontweight='bold', pad=15)
-    plt.xlabel("Message Size", fontsize=12, labelpad=10)
-    plt.ylabel("Effective Bandwidth (GB/s)", fontsize=12, labelpad=10)
     
-    plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0., title='Implementation')
-
-    # 7. Save
-    output_file = "s_curve_comparison.png"
+    plt.title(title, fontsize=16, fontweight='bold')
+    plt.xlabel("Input Size", fontsize=12)
+    plt.ylabel("Per-GPU Bandwidth (GB/s)", fontsize=12)
+    plt.legend(title='Implementation', loc="upper left")
+    
     plt.tight_layout()
     plt.savefig(output_file, dpi=300)
-    print(f"Plot saved to {output_file}")
+    plt.close()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Plot S-Curve from benchmark CSV")
-    parser.add_argument("input_file", type=str, nargs='?', default="results/output.csv", help="Path to the CSV file (default: results/output.csv)")
+    parser.add_argument("input_file", type=str, help="File containing CSV results")
+    parser.add_argument("--output", type=str, default="s_curve.png", help="Output filename")
+    parser.add_argument("--title", type=str, default="S-Curve Plot", help="Title of the plot")
     
     args = parser.parse_args()
-    plot_scurve(args.input_file)
+    plot_scurve(args.input_file, args.output, args.title)
