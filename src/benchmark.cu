@@ -96,6 +96,15 @@ int main(int argc, char** argv) {
     }
     int local_rank = rank % devices_per_node;
     CUDA_CALL(cudaSetDevice(local_rank));
+    init_benchmark_knob_from_env();
+
+    int sweep_n_batches = 2;
+    const char* be = getenv("ALLREDUCE_B");
+    if (!be || be[0] == '\0') be = getenv("ALLREDUCE_N_BATCHES");
+    if (be && be[0] != '\0') {
+        sweep_n_batches = atoi(be);
+        if (sweep_n_batches < 2) sweep_n_batches = 2;
+    }
 
     // get NCCL Unique ID from rank 0
     ncclUniqueId id;
@@ -139,6 +148,7 @@ int main(int argc, char** argv) {
             RunArgs args;
             args.input_size = input_size;
             args.comm = comm;
+            args.n_batches = sweep_n_batches;
             args.n_warmup = n_warmup;
             args.n_iters = n_iters;
             args.atol = atol;

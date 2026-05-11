@@ -29,7 +29,12 @@ static std::pair<long, long> get_offset_ag(int step, int rank, int n_ranks, long
 
 // ring all-reduce using RS + AG
 static void ring_allreduce(
-    const float* d_inbuf, float* d_outbuf, long input_size, ncclComm_t comm, cudaStream_t streams[2]
+    const float* d_inbuf,
+    float* d_outbuf,
+    long input_size,
+    ncclComm_t comm,
+    cudaStream_t streams[2],
+    int n_batches
 ) {
     // get rank and number of ranks
     int rank, n_ranks;
@@ -43,7 +48,6 @@ static void ring_allreduce(
         ));
 
     // compute chunk size and allocate temporary receive buffers
-    const int n_batches = 2;
     int n_chunks = n_ranks * n_batches;
     assert(n_batches > 1);
     assert(input_size >= n_chunks);
@@ -147,7 +151,7 @@ void ring_pipelined_nccl(RunArgs* args) {
 
 
     // call ring all-reduce
-    ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams);
+    ring_allreduce(d_inbuf, d_outbuf, input_size, comm, streams, args->n_batches);
 
 
     // copy back result to host and verify output, short circuit if incorrect

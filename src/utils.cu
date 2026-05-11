@@ -1,9 +1,38 @@
 // utils.cu
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/time.h>
 
 #include "interface.h"
+
+__constant__ unsigned int c_reduce_ns = 5000;
+/** 0: legacy proportional (buf_sz >> 8) ns; 1: fixed microseconds from ALLREDUCE_INTER_US */
+__constant__ unsigned int c_inter_mode = 0;
+__constant__ unsigned long long c_inter_fixed_ns = 0;
+
+static unsigned int g_inter_mode_host = 0;
+static unsigned long long g_inter_fixed_ns_host = 0;
+
+void init_benchmark_knob_from_env(void) {
+    unsigned int rn = 5000u;
+    const char* comp = getenv("ALLREDUCE_COMPUTE_NS");
+    if (!comp || comp[0] == '\0') comp = getenv("ALLREDUCE_REDUCE_NS");
+    if (comp && comp[0] != '\0') rn = (unsigned int)strtoul(comp, NULL, 10);
+    CUDA_CALL(cudaMemcpyToSymbol(c_reduce_ns, &rn, sizeof(rn)));
+
+    unsigned int mode = 0u;
+    unsigned long long fixed_ns = 0ull;
+    const char* inter = getenv("ALLREDUCE_INTER_US");
+    if (inter && inter[0] != '\0') {
+        mode = 1u;
+        fixed_ns = strtoull(inter, NULL, 10) * 1000ULL;
+    }
+    CUDA_CALL(cudaMemcpyToSymbol(c_inter_mode, &mode, sizeof(mode)));
+    CUDA_CALL(cudaMemcpyToSymbol(c_inter_fixed_ns, &fixed_ns, sizeof(fixed_ns)));
+    g_inter_mode_host = mode;
+    g_inter_fixed_ns_host = fixed_ns;
+}
 
 __global__ void init_input_kernel(float* buf, int rank, long input_size) {
     long idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -12,14 +41,15 @@ __global__ void init_input_kernel(float* buf, int rank, long input_size) {
 
 __global__ void add_kernel(float* dest, const float* src, long n) {
     long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    __nanosleep(5000);  // simulate "more work"
+    __nanosleep(c_reduce_ns);
     if (idx < n) dest[idx] += src[idx];
 }
 
 __global__ void sim_latency_kernel(size_t buf_sz) {
-    // simulate higher global communication cost as we can't test the full dragonfly
-    const unsigned int beta_global = buf_sz >> 8;
-    __nanosleep(beta_global);
+    unsigned long long total =
+        (c_inter_mode == 0u) ? ((unsigned long long)buf_sz >> 8u) : c_inter_fixed_ns;
+    unsigned int sleep_ns = (total > 0xffffffffULL) ? 0xffffffffu : (unsigned int)total;
+    __nanosleep(sleep_ns);
 }
 
 void ncclSendRecv(
@@ -42,8 +72,10 @@ void ncclSendRecv(
     const int send_group = send_rank / group_size;
     const int recv_group = recv_rank / group_size;
 
-    if (group != send_group || group != recv_group)
-        sim_latency_kernel<<<1, 32, 0, stream>>>(buf_sz);
+    if (group != send_group || group != recv_group) {
+        if (g_inter_mode_host != 1u || g_inter_fixed_ns_host != 0ull)
+            sim_latency_kernel<<<1, 32, 0, stream>>>(buf_sz);
+    }
 }
 
 bool check_correctness(float* h_res, int rank, int n_ranks, long input_size, float atol) {

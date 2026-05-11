@@ -20,7 +20,12 @@ static int ilog2_exact(int x) {
 
 // pipelined halving-doubling all-reduce
 static void hd_pipelined_impl(
-    const float* d_inbuf, float* d_outbuf, long input_size, ncclComm_t comm, cudaStream_t streams[2]
+    const float* d_inbuf,
+    float* d_outbuf,
+    long input_size,
+    ncclComm_t comm,
+    cudaStream_t streams[2],
+    int n_batches
 ) {
     int rank, n_ranks;
     ncclCommUserRank(comm, &rank);
@@ -29,7 +34,6 @@ static void hd_pipelined_impl(
     assert(input_size % n_ranks == 0);
 
     const int S = ilog2_exact(n_ranks);
-    const int n_batches = 2;
     const long chunk_size = input_size / n_ranks;
     // smallest sub-half at d=S-1 is chunk_size/n_batches — must be integer
     assert(chunk_size % n_batches == 0);
@@ -179,7 +183,7 @@ void halving_doubling_pipelined(RunArgs* args) {
 
 
     // call pipelined halving-doubling
-    hd_pipelined_impl(d_inbuf, d_outbuf, input_size, comm, streams);
+    hd_pipelined_impl(d_inbuf, d_outbuf, input_size, comm, streams, args->n_batches);
 
 
     // copy back result to host and verify output, short circuit if incorrect
@@ -199,14 +203,14 @@ void halving_doubling_pipelined(RunArgs* args) {
 
     // warmup
     for (int i = 0; i < args->n_warmup; i++)
-        hd_pipelined_impl(d_inbuf, d_outbuf, input_size, comm, streams);
+        hd_pipelined_impl(d_inbuf, d_outbuf, input_size, comm, streams, args->n_batches);
 
 
     // benchmark
     double* deltas = (double*)malloc(args->n_iters * sizeof(double));
     for (int i = 0; i < args->n_iters; i++) {
         double t0 = get_time();
-        hd_pipelined_impl(d_inbuf, d_outbuf, input_size, comm, streams);
+        hd_pipelined_impl(d_inbuf, d_outbuf, input_size, comm, streams, args->n_batches);
         double t1 = get_time();
         deltas[i] = t1 - t0;
     }

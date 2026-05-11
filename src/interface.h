@@ -34,6 +34,8 @@ typedef struct {
     // all-reduce arguments
     long input_size;
     ncclComm_t comm;
+    // micro-batches for pipelined Ring / HD only (ignored by PAARD, naive)
+    int n_batches;
     // benchmark & correctness arguments
     int n_warmup;
     int n_iters;
@@ -52,6 +54,9 @@ __global__ void init_input_kernel(float* buf, int rank, long input_size);
 
 // element-wise add kernel: dest[i] += src[i]
 __global__ void add_kernel(float* dest, const float* src, long n);
+
+/** Read env knobs for add_kernel sleep, inter-node sim delay, etc. Call once per MPI rank after cudaSetDevice. */
+void init_benchmark_knob_from_env(void);
 
 void ncclSendRecv(
     float* send_buf,
